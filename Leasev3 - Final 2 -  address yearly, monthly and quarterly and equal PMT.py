@@ -6,64 +6,62 @@ from datetime import datetime
 # Set Streamlit page configuration
 st.set_page_config(page_title="IFRS 16 Lease Calculator", layout="wide")
 
-# Function to calculate Present Value, Amortization, and ROU Schedule (with annuity due handling)
-def calculate_lease_schedules(lease_name, region, start_date, payments, payment_frequency, discount_rate, num_periods):
+def calculate_lease_schedules(lease_name, region, start_date, payments, payment_frequency, discount_rate, num_periods, num_months):
     discount_rate = discount_rate / 100  # Convert percentage to decimal
     present_value = 0
-    amortization_schedule = []
-    rou_schedule = []
-    remaining_lease_liability = 0
 
-    # Corrected Present Value Calculation (Annuity Due Handling)
+    # --- Present Value Calculation (Annuity Due Handling) ---
     if payment_frequency == "monthly":
         for i in range(num_periods):
             if i == 0:
-                present_value += payments[i]  # First payment not discounted
+                present_value += payments[i]
             else:
                 discounted_payment = payments[i] / ((1 + discount_rate / 12) ** i)
                 present_value += discounted_payment
-
     elif payment_frequency == "quarterly":
-        num_quarters = num_periods  # Already in quarters
-        for q in range(num_quarters):
+        for q in range(num_periods):
             if q == 0:
-                present_value += payments[q]  # First payment not discounted
+                present_value += payments[q]
             else:
                 discounted_payment = payments[q] / ((1 + discount_rate / 4) ** q)
                 present_value += discounted_payment
-
     elif payment_frequency == "yearly":
         for i in range(num_periods):
             if i == 0:
-                present_value += payments[i]  # First payment not discounted
+                present_value += payments[i]
             else:
                 discounted_payment = payments[i] / ((1 + discount_rate) ** i)
                 present_value += discounted_payment
 
-    remaining_lease_liability = present_value
+    # Save the present value as the initial liability and ROU asset value
+    initial_liability = present_value
     rou_asset = present_value
-    accumulated_depreciation = 0
 
-    # Generate amortization and ROU schedules
-    for i in range(num_periods):
-        interest_expense = remaining_lease_liability * (discount_rate / 12)  # Monthly interest
+    # --- Lease Liability Amortization Schedule (Monthly Breakdown) ---
+    amortization_schedule = []
+    remaining_lease_liability = initial_liability
+
+    for i in range(num_months):
+        interest_expense = remaining_lease_liability * (discount_rate / 12)
         current_month = (start_date + pd.DateOffset(months=i)).strftime("%b-%y")
-        
+
+        # Determine payment based on frequency:
         if payment_frequency == "monthly":
             payment = payments[i] if i < len(payments) else payments[-1]
-        elif payment_frequency == "quarterly" and i % 3 == 0:
-            payment = payments[i // 3] if i // 3 < len(payments) else payments[-1]
-        elif payment_frequency == "yearly" and i % 12 == 0:
-            payment = payments[i // 12] if i // 12 < len(payments) else payments[-1]
+        elif payment_frequency == "quarterly":
+            payment = payments[i // 3] if i % 3 == 0 and (i // 3) < len(payments) else 0
+        elif payment_frequency == "yearly":
+            payment = payments[i // 12] if i % 12 == 0 and (i // 12) < len(payments) else 0
         else:
             payment = 0
 
         lease_liability = remaining_lease_liability + interest_expense - payment
-        remaining_lease_liability = max(lease_liability, 0)
 
-        depreciation = rou_asset / num_periods
-        accumulated_depreciation += depreciation
-        net_rou_value = rou_asset - accumulated_depreciation
+        # Final adjustment: if this is the last month, set the remaining liability to zero
+        if i == num_months - 1:
+            lease_liability = 0
+
+        remaining_lease_liability = max(lease_liability, 0)
 
         amortization_schedule.append({
             "Lease Contract Name": lease_name,
@@ -74,18 +72,27 @@ def calculate_lease_schedules(lease_name, region, start_date, payments, payment_
             "Remaining Lease Liability": round(remaining_lease_liability, 2)
         })
 
+    # --- ROU Amortization Schedule (Monthly Breakdown) ---
+    rou_schedule = []
+    accumulated_depreciation = 0
+    monthly_depreciation = rou_asset / num_months  # Evenly spread over all months
+
+    for j in range(num_months):
+        current_month = (start_date + pd.DateOffset(months=j)).strftime("%b-%y")
+        accumulated_depreciation += monthly_depreciation
+        net_rou_value = rou_asset - accumulated_depreciation
+
         rou_schedule.append({
             "Lease Contract Name": lease_name,
             "Region": region,
             "Month": current_month,
             "ROU Asset Value": round(rou_asset, 2),
-            "Depreciation": round(depreciation, 2),
+            "Depreciation": round(monthly_depreciation, 2),
             "Accumulated Depreciation": round(accumulated_depreciation, 2),
             "Net ROU Value": round(net_rou_value, 2)
         })
 
     return round(present_value, 2), pd.DataFrame(amortization_schedule), pd.DataFrame(rou_schedule)
-
 
 # Streamlit User Interface
 st.title("\U0001F4CA IFRS 16 Lease Calculator with ROU Amortization & Early Termination")
@@ -109,27 +116,32 @@ if uploaded_file:
         rou_schedules = []
 
         for index, row in df.iterrows():
-            # Correct calculation of num_periods
+            # Calculate the total number of months in the lease term
+            num_months = (row["end_date"].year - row["start_date"].year) * 12 + (row["end_date"].month - row["start_date"].month) + 1
+
+            # Determine the number of payment periods based on frequency:
             if row["payment_frequency"] == "yearly":
                 num_periods = (row["end_date"].year - row["start_date"].year) + (1 if row["end_date"].month >= row["start_date"].month else 0)
             elif row["payment_frequency"] == "monthly":
-                num_periods = (row["end_date"].year - row["start_date"].year) * 12 + (row["end_date"].month - row["start_date"].month) + 1
+                num_periods = num_months
             elif row["payment_frequency"] == "quarterly":
-                num_periods = ((row["end_date"].year - row["start_date"].year) * 12 + (row["end_date"].month - row["start_date"].month)) // 3 + 1  # Fixed
+                num_periods = (num_months // 3) if (num_months % 3 == 0) else (num_months // 3 + 1)
 
-            # Use payments from the 'payment_amounts' column
-            payment_str = row["payment_amounts"]
-
-            # Check if the payment is a single value (not a comma-separated string)
-            if isinstance(payment_str, str):
-                # If it's a string, split by commas and convert to float
-                payments = [float(x) for x in payment_str.split(",")]
-            else:
-                # If it's a single value, repeat it for the number of periods
+            payment_str = str(row["payment_amounts"]).strip()
+            if ',' not in payment_str:
                 payments = [float(payment_str)] * num_periods
+            else:
+                payments = [float(x) for x in payment_str.split(",")]
 
             pv, amort_schedule, rou_schedule = calculate_lease_schedules(
-                row["lease_name"], row["region"], row["start_date"], payments, row["payment_frequency"], row["discount_rate"], num_periods
+                row["lease_name"],
+                row["region"],
+                row["start_date"],
+                payments,
+                row["payment_frequency"],
+                row["discount_rate"],
+                num_periods,
+                num_months
             )
 
             amortization_schedules.append(amort_schedule)
