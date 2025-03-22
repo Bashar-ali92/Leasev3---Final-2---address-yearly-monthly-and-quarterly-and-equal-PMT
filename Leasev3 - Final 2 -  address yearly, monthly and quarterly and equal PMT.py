@@ -20,6 +20,7 @@ def authenticate_user():
 
     # Check if the entered credentials match any of the valid users
     if username in valid_users and valid_users[username] == password:
+        st.session_state["username"] = username  # Store username in session state
         return True
     else:
         st.error("Invalid username or password")
@@ -27,9 +28,13 @@ def authenticate_user():
 
 # Authenticate user
 if authenticate_user():
-    def calculate_lease_schedules(lease_name, region, start_date, payments, payment_frequency, discount_rate, num_periods, num_months):
+    def calculate_lease_schedules(lease_name, region, owner_name, start_date, payments, payment_frequency, discount_rate, num_periods, num_months):
         discount_rate = discount_rate / 100  # Convert percentage to decimal
         present_value = 0
+
+        # Get username and creation date
+        username_value = st.session_state.get("username", "Unknown")
+        creation_date = datetime.today().strftime("%Y-%m-%d")
 
         # --- Present Value Calculation (Annuity Due Handling) ---
         if payment_frequency == "monthly":
@@ -87,10 +92,13 @@ if authenticate_user():
             amortization_schedule.append({
                 "Lease Contract Name": lease_name,
                 "Region": region,
+                "Owner Name": owner_name,
                 "Month": current_month,
                 "Payment": round(payment, 2),
                 "Interest Expense": round(interest_expense, 2),
-                "Remaining Lease Liability": round(remaining_lease_liability, 2)
+                "Remaining Lease Liability": round(remaining_lease_liability, 2),
+                "Username": username_value,
+                "Creation Date": creation_date
             })
 
         # --- ROU Amortization Schedule (Monthly Breakdown) ---
@@ -106,17 +114,20 @@ if authenticate_user():
             rou_schedule.append({
                 "Lease Contract Name": lease_name,
                 "Region": region,
+                "Owner Name": owner_name,
                 "Month": current_month,
                 "ROU Asset Value": round(rou_asset, 2),
                 "Depreciation": round(monthly_depreciation, 2),
                 "Accumulated Depreciation": round(accumulated_depreciation, 2),
-                "Net ROU Value": round(net_rou_value, 2)
+                "Net ROU Value": round(net_rou_value, 2),
+                "Username": username_value,
+                "Creation Date": creation_date
             })
 
         return round(present_value, 2), pd.DataFrame(amortization_schedule), pd.DataFrame(rou_schedule)
 
     # Streamlit User Interface
-    st.title("\U0001F4CA IFRS 16 Lease Calculator with ROU Amortization & Early Termination")
+    st.title("\U0001F4CA Ooredoo Palestine IFRS 16 Lease Calculator")
     st.markdown("Upload an **Excel or CSV file** to calculate lease present value, amortization schedule, and ROU asset depreciation.")
 
     uploaded_file = st.file_uploader("\U0001F4C2 Upload an Excel or CSV file", type=["xlsx", "csv"])
@@ -127,7 +138,7 @@ if authenticate_user():
         st.write("### 🔍 Uploaded Data Preview:")
         st.dataframe(df.head())
 
-        required_columns = ["lease_name", "region", "currency", "start_date", "end_date", "discount_rate", "payment_frequency", "payment_amounts"]
+        required_columns = ["lease_name", "region", "owner_name", "currency", "start_date", "end_date", "discount_rate", "payment_frequency", "payment_amounts"]
         if all(col in df.columns for col in required_columns):
             df["start_date"] = pd.to_datetime(df["start_date"])
             df["end_date"] = pd.to_datetime(df["end_date"])
@@ -135,6 +146,10 @@ if authenticate_user():
             results = []
             amortization_schedules = []
             rou_schedules = []
+            
+            # Get the username and creation date once here
+            username_value = st.session_state.get("username", "Unknown")
+            creation_date = datetime.today().strftime("%Y-%m-%d")
 
             for index, row in df.iterrows():
                 # Calculate the total number of months in the lease term
@@ -157,6 +172,7 @@ if authenticate_user():
                 pv, amort_schedule, rou_schedule = calculate_lease_schedules(
                     row["lease_name"],
                     row["region"],
+                    row["owner_name"],
                     row["start_date"],
                     payments,
                     row["payment_frequency"],
@@ -171,12 +187,15 @@ if authenticate_user():
                 results.append({
                     "Lease Contract Name": row["lease_name"],
                     "Region": row["region"],
+                    "Owner Name": row["owner_name"],
                     "Currency": row["currency"],
                     "Start Date": row["start_date"],
                     "End Date": row["end_date"],
                     "Discount Rate": row["discount_rate"],
                     "Payment Frequency": row["payment_frequency"],
-                    "Present Value": pv
+                    "Present Value": pv,
+                    "Username": username_value,
+                    "Creation Date": creation_date
                 })
 
             result_df = pd.DataFrame(results)
